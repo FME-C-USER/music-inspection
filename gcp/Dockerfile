@@ -1,5 +1,13 @@
 FROM nginx:mainline-alpine
-RUN apk update && apk upgrade --no-cache && apk add --no-cache openssl ca-certificates && rm -rf /var/cache/apk/*
+
+# 資安：每次建置強制把所有 OS 套件升級到最新修補版
+# （修復 curl / openssl / expat / util-linux 等 CVE；--available 強制拉最新可用版）
+# 改 REBUILD_DATE 可強制重新執行此層，確保拉到當下最新修補
+ARG REBUILD_DATE=2026-09-17
+RUN apk update && \
+    apk upgrade --no-cache --available && \
+    apk add --no-cache --upgrade ca-certificates openssl && \
+    rm -rf /var/cache/apk/*
 
 RUN printf 'server {\n\
     listen 8080;\n\
