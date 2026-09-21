@@ -1,11 +1,16 @@
 # generated-by: github-action-n
 # version: 2.1.9
+# customized: 自動重建排程（每月 1/11/21 台灣時間 02:00）+ 手動觸發
 name: Deploy
 
 on:
   push:
     branches:
       - main
+  schedule:
+    # 每日 UTC 18:00 觸發（= 台灣時間隔日 02:00），由 date_gate 判斷是否真正重建
+    - cron: '0 18 * * *'
+  workflow_dispatch:
 
 env:
   REGION: asia-east1
@@ -13,7 +18,34 @@ env:
   SERVICE_NAME: music-inspect
 
 jobs:
+  # 日期閘門：排程觸發時，只有台灣日期為 1/11/21 才放行；push 與手動觸發一律放行
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Date gate
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "proceed=true" >> $GITHUB_OUTPUT
+            echo "觸發方式：${{ github.event_name }}（非排程），繼續執行。"
+          else
+            DAY=$(TZ=Asia/Taipei date +%d)
+            echo "目前台灣日期：${DAY} 號"
+            case "$DAY" in
+              01|11|21)
+                echo "proceed=true" >> $GITHUB_OUTPUT
+                echo "今日為自動重建日（1/11/21），繼續執行。" ;;
+              *)
+                echo "proceed=false" >> $GITHUB_OUTPUT
+                echo "今日非自動重建日（僅 1/11/21 執行），本次略過。" ;;
+            esac
+          fi
+
   deploy:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -32,17 +64,21 @@ jobs:
         id: deployer
         run: |
           FULL_EMAIL="${{ github.event.head_commit.author.email }}"
+          if [ -z "$FULL_EMAIL" ]; then FULL_EMAIL="${{ github.actor }}"; fi
           PREFIX="${FULL_EMAIL%%@*}"
           LABEL=$(echo "$PREFIX" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g' | cut -c1-63)
+          if [ -z "$LABEL" ]; then LABEL="auto"; fi
           REPO="${{ github.event.repository.name }}"
           REPO_LABEL=$(echo "$REPO" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g' | cut -c1-63)
           echo "label=$LABEL" >> $GITHUB_OUTPUT
           echo "repo=$REPO_LABEL" >> $GITHUB_OUTPUT
-          echo "Deployed by (GitHub actor): ${{ github.actor }}"
-          echo "Deployed by (full email): $FULL_EMAIL"
+          echo "Trigger: ${{ github.event_name }}"
+          echo "Deployed by: $FULL_EMAIL"
           echo "Repo: $REPO"
 
+      # 資安報告僅在 push（有程式變更）時檢查；排程/手動的維護性重建不檢查
       - name: Check security report
+        if: github.event_name == 'push'
         run: |
           TODAY=$(date +%Y%m%d)
           REPORT=$(ls security-report-${TODAY}-*.docx 2>/dev/null | head -1)
